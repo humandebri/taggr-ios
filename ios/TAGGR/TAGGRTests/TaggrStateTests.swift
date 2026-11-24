@@ -1305,14 +1305,16 @@ extension TaggrTests {
         XCTAssertEqual(Set(calls.dropFirst(3).map(\.method)), Set(["user", "hot_posts"]))
         XCTAssertEqual(calls[0].arg, Data([1, 2, 3]))
         XCTAssertEqual(calls[1].arg, Data([1, 2, 3]))
-        try assertAddPostRequest(calls[2].arg, text: body,
-                refs: [
-                    (id: "abc12345", offset: 7, length: 3),
-                    (id: "abc12301", offset: 8, length: 3),
-                ],
-                parent: nil,
-                realm: nil,
-                extensionBlob: nil)
+        let wire = try CandidDecoder().decode(XCTUnwrap(calls[2].arg))
+        XCTAssertEqual(wire.values.count, 5)
+        XCTAssertEqual(try wire.decode(String.self, at: 0), body)
+        let files = try wire.decode([TaggrAddPostArgument2Element].self, at: 1)
+        XCTAssertEqual(files.map(\.field0), ["abc12345", "abc12301"])
+        XCTAssertEqual(Set(files.map(\.field1)), Set([7, 8]))
+        XCTAssertEqual(files.map(\.field2), [3, 3])
+        XCTAssertEqual(try wire.decode(UInt64?.self, at: 2), nil)
+        XCTAssertEqual(try wire.decode(String?.self, at: 3), nil)
+        XCTAssertEqual(try wire.decode(Data?.self, at: 4), nil)
     }
 
     @MainActor

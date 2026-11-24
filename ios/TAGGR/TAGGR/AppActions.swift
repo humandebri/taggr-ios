@@ -442,6 +442,10 @@ extension TaggrAppCoordinator {
     ) -> Bool {
         let context = postSubmissionContext()
         return enqueuePostSubmission(key: .edit(post.id), draft: draft, reconciliation: {
+            guard self.canReconcilePostSubmission(context) else { return }
+            if self.featurePosts.posts[post.id] != nil {
+                await self.refreshFeaturePost(post.id)
+            }
             await self.reconcilePostSubmission(.mutation, context: context)
         }) { [weak self] in
             guard let self else {
@@ -647,12 +651,17 @@ extension TaggrAppCoordinator {
     }
 
     func deletePost(_ post: TaggrPost) async {
-        let succeeded = await runBusy {
+        let context = TaggrFeatureContext(self)
+        await runBusy {
             let versions = try post.deletionVersions()
-            _ = try await api.updateJSON("delete_post", args: [post.id, versions], identity: authSession)
+            _ = try await context.api.updateJSON("delete_post", args: [post.id, versions], identity: context.identity)
+            guard context.matches(self) else { return }
+            featurePosts.posts[post.id] = nil
+            featurePosts.operations[post.id] = nil
+            featurePosts.errors[post.id] = nil
+            invalidateNotificationPost(post.id)
             await loadCurrentRoute()
         }
-        if succeeded { invalidateNotificationPost(post.id) }
     }
 
     func loadEmbeddedPost(_ id: Int) async -> TaggrPost? {

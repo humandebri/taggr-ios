@@ -145,6 +145,68 @@ extension TaggrTests {
     }
 
     @MainActor
+    func testDeletePostInvalidatesEmbeddedCacheOnlyAfterSuccess() async throws {
+        for succeeds in [false, true] {
+            let api = makeStubbedAPI { request in
+                if !succeeds { throw URLError(.notConnectedToInternet) }
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (response, Self.queryReply(Data("null".utf8)))
+            }
+            let state = makeCoordinator(api: api)
+            state.authSession = makeAuthSession(privateKey: Curve25519.Signing.PrivateKey())
+            state.route = .settings
+            let post = samplePost(id: 42, user: 7, body: "hello", files: [:])
+            state.featurePosts.register([post])
+            state.featurePosts.errors[42] = "Previous refresh failed"
+            state.featurePosts.operations[42] = .refreshRequired
+
+            await state.deletePost(post)
+
+            if succeeds {
+                XCTAssertNil(state.featurePosts.posts[42])
+                XCTAssertNil(state.featurePosts.operations[42])
+                XCTAssertNil(state.featurePosts.errors[42])
+            } else {
+                XCTAssertEqual(state.featurePosts.posts[42]?.body, "hello")
+                XCTAssertNotNil(state.featurePosts.errors[42])
+            }
+        }
+    }
+
+    @MainActor
+    func testEditPostRefreshesEmbeddedCacheAfterSubmission() async throws {
+        let refreshedEnvelope = String(data: postEnvelopeFixture(id: 42), encoding: .utf8)!
+        let api = makeStubbedAPI { request in
+            let method = self.requestMethodAndArg(from: request)?.method
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch method {
+            case "posts":
+                return (response, Self.queryReply(Data("[\(refreshedEnvelope)]".utf8)))
+            case "user":
+                return (response, Self.queryReply(Self.currentUserFixture()))
+            default:
+                return (response, Self.queryReply(Self.candidEditPostResultOk()))
+            }
+        }
+        let state = makeCoordinator(api: api)
+        state.authSession = makeAuthSession(privateKey: Curve25519.Signing.PrivateKey())
+        state.currentUser = try JSONDecoder.taggr.decode(TaggrUser.self, from: Self.currentUserFixture())
+        state.safety.accept(scope: state.safetyScope)
+        state.route = .settings
+        let post = samplePost(id: 42, user: 7, body: "Old cached body", files: [:])
+        state.featurePosts.register([post])
+
+        await runQueuedSubmission(state, context: .edit(42), text: "hello", realm: nil, images: []) { draft in
+            state.enqueueEditPost(post: post, text: "hello", realm: nil, draft: draft)
+        }
+        await waitForPostReconciliation(state)
+
+        XCTAssertEqual(state.featurePosts.posts[42]?.body, "hello")
+        XCTAssertNil(state.featurePosts.errors[42])
+        XCTAssertNil(state.featurePosts.operations[42])
+    }
+
+    @MainActor
     func testDeletePostDoesNotCallBackendWhenPatchHistoryIsInvalid() async {
         var calls: [(method: String, arg: Data)] = []
         let api = makeStubbedAPI { request in

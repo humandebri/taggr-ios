@@ -370,14 +370,17 @@ extension TaggrTests {
         XCTAssertEqual(attributed.string, "• first\n• second")
     }
 
-    func testRepostEmbeddedBodyCapsTheEmbeddedPreview() async throws {
+    func testRepostUsesTheNormalPostPreview() async throws {
         let longBody = Array(
             repeating: "This reposted post is long enough that the card has to truncate it.",
             count: 12
         ).joined(separator: " ")
 
+        let state = makeCoordinator()
+        state.safety.accept(scope: state.safetyScope)
+        state.featurePosts.register([samplePost(id: 42, body: longBody, files: [:])])
         let host = UIHostingController(
-            rootView: RepostEmbeddedBodyView(text: longBody, authorName: "@author", badges: [])
+            rootView: RepostExtensionView(postId: 42).environment(state)
         )
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous = scene.windows.first { $0.isKeyWindow }
@@ -389,11 +392,16 @@ extension TaggrTests {
         try await settleLayout(window: window, host: host)
 
         let textView = try XCTUnwrap(
-            findView(in: host.view, accessibilityIdentifier: "repost-embedded-body")
+            findView(in: host.view, accessibilityIdentifier: "post-42-body")
                 as? TaggrInteractiveMarkdownText.TextView
         )
-        XCTAssertEqual(textView.textContainer.maximumNumberOfLines, 4)
-        XCTAssertGreaterThan(textView.lineCount() ?? 0, 4)
+        XCTAssertEqual(textView.textContainer.maximumNumberOfLines, 10)
+        XCTAssertGreaterThan(textView.lineCount() ?? 0, 10)
+
+        // The embedded row must observe the same store that post actions update.
+        state.updatePost(42) { _ in self.samplePost(id: 42, body: "Updated original", files: [:]) }
+        try await settleLayout(window: window, host: host)
+        XCTAssertEqual(textView.attributedText.string, "Updated original")
     }
 
     func testMarkdownReportsTruncationOnlyWhenTextExceedsTheLineLimit() async throws {

@@ -954,105 +954,45 @@ struct PostExtensionView: View {
 struct RepostExtensionView: View {
     @Environment(TaggrAppCoordinator.self) private var state
     let postId: Int
-    @State private var embeddedPost: TaggrPost?
+    @State private var hasLoaded = false
 
     var body: some View {
         Group {
-            if let embeddedPost, state.canDisplayPost(embeddedPost), embeddedPost.contentRestriction(viewerID: state.currentUser?.id) == nil {
-                RepostEmbeddedBodyView(
-                    text: embeddedPost.displayBody,
-                    authorName: embeddedPost.meta.authorName ?? "@\(embeddedPost.user)",
-                    badges: TaggrUserBadge.decoded(from: embeddedPost.meta.authorBadges)
-                ) {
-                    state.navigateToPost(embeddedPost.id)
+            if let post = state.featurePosts.posts[postId], state.canDisplayPost(post) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Label("Repost", systemImage: "arrow.2.squarepath")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(TaggrTheme.secondaryText)
+                        .padding(.horizontal, TimelineLayout.rowHorizontalPadding)
+                        .padding(.top, 12)
+                    // Reposts can contain another post row. Erase the recursive
+                    // view type while keeping the normal post controls and state.
+                    AnyView(FeaturePostList(postIDs: [postId]))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else if embeddedPost != nil {
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(TaggrTheme.panelRaised, lineWidth: 1)
+                }
+            } else if hasLoaded || state.featurePosts.posts[postId] != nil {
                 CompactNoticeView(title: "Repost unavailable", systemImage: "eye.slash")
             } else {
                 CompactNoticeView(title: "Loading repost", systemImage: "arrow.2.squarepath")
-                    .task(id: postId) {
-                        embeddedPost = await state.loadEmbeddedPost(postId)
-                    }
             }
         }
-    }
-}
-
-/// The embedded card of a repost. A reposted post often exceeds the four
-/// preview lines, so the card offers the same expansion the timeline rows do.
-/// The header and the preview body stay the navigation target; the expansion
-/// toggle sits outside them because SwiftUI does not render a Button nested in
-/// a Button label.
-struct RepostEmbeddedBodyView: View {
-    let text: String
-    var authorName: String
-    var badges: [TaggrUserBadge]
-    var maximumLines = 4
-    var openPost: (() -> Void)?
-
-    @State private var isExpanded = false
-    @State private var isTruncated = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                Button(action: open) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("Repost", systemImage: "arrow.2.squarepath")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(TaggrTheme.secondaryText)
-                        Text(authorName)
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(TaggrTheme.clickable)
-                        UserAttributeBadgesView(badges: badges)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                TaggrPostBodyView(
-                    text: text,
-                    maximumLines: isExpanded ? nil : maximumLines,
-                    textStyle: .subheadline,
-                    textColor: TaggrTheme.secondaryText,
-                    lineSpacing: 0,
-                    accessibilityIdentifier: "repost-embedded-body",
-                    openPost: openPost,
-                    onTruncationChange: updateTruncation
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: postId) {
+            guard state.featurePosts.posts[postId] == nil else {
+                hasLoaded = true
+                return
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(TaggrTheme.panel)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            if !isExpanded, isTruncated {
-                Button(action: expand) {
-                    Label("Show full post", systemImage: "chevron.down")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(TaggrTheme.clickable)
-                }
-                .buttonStyle(.plain)
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
-                .accessibilityIdentifier("repost-show-full-post")
-            }
+            let context = TaggrFeatureContext(state)
+            let generation = state.featurePosts.listGeneration
+            let post = await state.loadEmbeddedPost(postId)
+            guard !Task.isCancelled, context.matches(state),
+                  generation == state.featurePosts.listGeneration else { return }
+            if let post { state.featurePosts.register([post]) }
+            hasLoaded = true
         }
-    }
-
-    private func open() {
-        openPost?()
-    }
-
-    private func expand() {
-        isExpanded = true
-        isTruncated = false
-    }
-
-    private func updateTruncation(_ value: Bool) {
-        guard isTruncated != value else { return }
-        isTruncated = value
     }
 }
 
